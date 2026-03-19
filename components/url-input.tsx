@@ -33,7 +33,7 @@ export function URLInput({ onSubmit, isLoading }: URLInputProps) {
       .catch(() => {
         // Fallback — show all providers
         setProviders([
-          { name: "gemini", displayName: "Gemini 2.5 Flash" },
+          { name: "gemini", displayName: "Gemini 3 Flash" },
           { name: "openai", displayName: "GPT-4.1 Mini" },
           { name: "anthropic", displayName: "Claude Haiku 4.5" },
         ]);

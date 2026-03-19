@@ -1,31 +1,35 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { TranslationProvider } from "../types";
 
 export function createGeminiProvider(): TranslationProvider | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  const genAI = new GoogleGenerativeAI(apiKey);
+  const ai = new GoogleGenAI({ apiKey });
 
   return {
     name: "gemini",
-    displayName: "Gemini 2.5 Flash",
+    displayName: "Gemini 3 Flash",
     async translate(
       textMap: Record<string, string>,
       systemPrompt: string
     ): Promise<Record<string, string>> {
-      const model = genAI.getGenerativeModel({
-        model: "gemini-2.5-flash-preview-05-20",
-        generationConfig: {
-          temperature: 0.3,
+      const userPrompt = `${systemPrompt}\n\nInput JSON:\n${JSON.stringify(textMap)}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: userPrompt,
+        config: {
+          // Gemini 3 recommends temperature 1.0 — lower values cause looping
+          temperature: 1.0,
           responseMimeType: "application/json",
         },
       });
 
-      const userPrompt = `${systemPrompt}\n\nInput JSON:\n${JSON.stringify(textMap)}`;
-
-      const result = await model.generateContent(userPrompt);
-      const responseText = result.response.text();
+      const responseText = response.text;
+      if (!responseText) {
+        throw new Error("Gemini returned an empty response");
+      }
 
       try {
         return JSON.parse(responseText);

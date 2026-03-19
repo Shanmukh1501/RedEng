@@ -18,7 +18,7 @@ import {
 } from "@/lib/reddit";
 
 const PROVIDER_DISPLAY: Record<ProviderName, string> = {
-  gemini: "Gemini 2.5 Flash",
+  gemini: "Gemini 3 Flash",
   openai: "GPT-4.1 Mini",
   anthropic: "Claude Haiku 4.5",
 };
