@@ -4,7 +4,9 @@
       "Bash(npx create-next-app@latest . --typescript --tailwind --app --eslint --no-src-dir --import-alias \"@/*\" --use-npm --turbopack)",
       "Read(//c/Users/kshan/OneDrive/Documents/projects/**)",
       "Bash(npx create-next-app@latest redeng --typescript --tailwind --app --eslint --no-src-dir --import-alias \"@/*\" --use-npm --turbopack)",
-      "Bash(npx create-next-app@latest redeng --typescript --tailwind --app --eslint --no-src-dir --import-alias \"@/*\" --use-npm --turbopack --no-react-compiler)"
+      "Bash(npx create-next-app@latest redeng --typescript --tailwind --app --eslint --no-src-dir --import-alias \"@/*\" --use-npm --turbopack --no-react-compiler)",
+      "Bash(npm install:*)",
+      "Bash(npx shadcn@latest init -d --force)"
     ]
   }
 }
