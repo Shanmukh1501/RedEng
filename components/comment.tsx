@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useRef } from "react";
 import { RedditComment } from "@/lib/types";
 
 function timeAgo(utc: number): string {
@@ -14,7 +14,6 @@ function timeAgo(utc: number): string {
 }
 
 function formatScore(score: number): string {
-  if (score >= 10000) return `${(score / 1000).toFixed(1)}k`;
   if (score >= 1000) return `${(score / 1000).toFixed(1)}k`;
   return String(score);
 }
@@ -27,11 +26,37 @@ interface CommentProps {
 export function Comment({ comment, depth = 0 }: CommentProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isDeleted =
     comment.author === "[deleted]" || comment.text === "[deleted]";
   const isRemoved = comment.text === "[removed]";
-  const hasTranslation = comment.text !== comment.originalText;
+  const hasTranslation =
+    comment.isTranslated && comment.text !== comment.originalText;
+
+  // Press-and-hold: show original text while holding on the comment body
+  const handlePointerDown = useCallback(() => {
+    if (!hasTranslation) return;
+    holdTimerRef.current = setTimeout(() => {
+      setShowOriginal(true);
+    }, 200); // 200ms hold threshold
+  }, [hasTranslation]);
+
+  const handlePointerUp = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setShowOriginal(false);
+  }, []);
+
+  const handlePointerLeave = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setShowOriginal(false);
+  }, []);
 
   return (
     <div className="relative">
@@ -40,7 +65,6 @@ export function Comment({ comment, depth = 0 }: CommentProps) {
         <div
           className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#343536] hover:bg-[#d7dadc] cursor-pointer transition-colors"
           onClick={() => setCollapsed(!collapsed)}
-          style={{ marginLeft: 0 }}
         />
       )}
 
@@ -57,7 +81,7 @@ export function Comment({ comment, depth = 0 }: CommentProps) {
             className={`font-semibold ${
               isDeleted
                 ? "text-[#818384] italic"
-                : "text-[#d7dadc] hover:underline cursor-pointer"
+                : "text-[#d7dadc]"
             }`}
           >
             {comment.author}
@@ -73,12 +97,9 @@ export function Comment({ comment, depth = 0 }: CommentProps) {
           {hasTranslation && !collapsed && (
             <>
               <span className="text-[#818384]">·</span>
-              <button
-                onClick={() => setShowOriginal(!showOriginal)}
-                className="text-[#4fbcff] hover:text-[#7fcdff] transition-colors"
-              >
-                {showOriginal ? "translated" : "original"}
-              </button>
+              <span className="text-[#4fbcff] text-[10px] select-none">
+                hold to see original
+              </span>
             </>
           )}
         </div>
@@ -87,11 +108,20 @@ export function Comment({ comment, depth = 0 }: CommentProps) {
         {!collapsed && (
           <div className="pb-2">
             <div
-              className={`text-sm leading-relaxed whitespace-pre-wrap ${
+              onPointerDown={handlePointerDown}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerLeave}
+              onContextMenu={(e) => {
+                // Prevent context menu on long press (mobile)
+                if (hasTranslation) e.preventDefault();
+              }}
+              className={`text-sm leading-relaxed whitespace-pre-wrap select-text transition-colors duration-200 ${
                 isDeleted || isRemoved
                   ? "text-[#818384] italic"
-                  : "text-[#d7dadc]"
-              }`}
+                  : showOriginal
+                    ? "text-[#a0a0a0] italic bg-[#1f1f20] rounded px-2 py-1 -mx-2"
+                    : "text-[#d7dadc]"
+              } ${hasTranslation ? "cursor-pointer" : ""}`}
             >
               {showOriginal ? comment.originalText : comment.text}
             </div>
@@ -110,7 +140,7 @@ export function Comment({ comment, depth = 0 }: CommentProps) {
             )}
 
             {/* More comments indicator */}
-            {comment.moreCount && comment.moreCount > 0 && (
+            {comment.moreCount != null && comment.moreCount > 0 && (
               <div className="text-xs text-[#4fbcff] mt-2 ml-4">
                 {comment.moreCount} more{" "}
                 {comment.moreCount === 1 ? "reply" : "replies"}

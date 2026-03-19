@@ -1,68 +1,28 @@
-import { ProviderName, RedditPost, TranslationProvider } from "./types";
-import { flattenTextMap, injectTranslations } from "./reddit";
+import { ProviderName, TranslationProvider } from "./types";
 import { createGeminiProvider } from "./providers/gemini";
 import { createOpenAIProvider } from "./providers/openai";
 import { createAnthropicProvider } from "./providers/anthropic";
 
-const SYSTEM_PROMPT = `You are an expert bilingual translator specializing in Hindi, Hinglish (Romanized Hindi written in Latin script), and English. You deeply understand Indian internet culture, Reddit slang, memes, and colloquial expressions.
+const SYSTEM_PROMPT = `You are an expert translator specializing in Hindi, Hinglish (Romanized Hindi written in Latin script), and English. You are deeply immersed in Indian Gen-Z internet culture and understand the slang, humor, and tone of subreddits like r/india, r/mumbai, r/delhi, r/bollywood, r/IndianGaming, r/TotalKalesh, r/IndiaSpeaks, and similar Indian communities.
 
 You will receive a JSON object where keys are IDs and values are Reddit post/comment texts.
 
-Your task:
-1. Translate all Hindi and Hinglish text into natural, native-flowing English.
-2. If the text is already in English, return it COMPLETELY UNCHANGED.
-3. For code-switched text (mixed Hindi/English), translate ONLY the non-English parts while keeping the English parts intact, then make the full sentence flow naturally in English.
-4. Maintain the original tone exactly — sarcasm, humor, anger, excitement, sadness, mockery, etc.
-5. Preserve Reddit formatting (markdown, line breaks, bullet points).
-6. Translate slang to equivalent English internet slang where appropriate (e.g., "yaar" → "dude/man", "bhai" → "bro").
-7. If text contains names, places, or proper nouns in Hindi, transliterate them to English.
-8. Keep [deleted] and [removed] as-is.
+TRANSLATION RULES:
+1. Translate the VIBE and INTENT, not literal word-for-word. Example: "Bhai kya kar raha hai tu" → "Bro, what are you even doing?" (NOT "Brother what doing are you")
+2. If text is already in standard English, return it COMPLETELY UNTOUCHED. Do not rephrase, improve, or alter English text.
+3. For code-switched text (mixed Hindi+English in one sentence), translate ONLY the Hindi/Hinglish portions, then stitch the full sentence so it flows naturally in English.
+4. PRESERVE the exact original tone — sarcasm, humor, anger, excitement, mockery, sadness, passive-aggressiveness. Indian internet humor is sharp; keep it sharp.
+5. Translate slang to equivalent English internet slang: "yaar/yar" → "dude/man", "bhai" → "bro", "arre" → "oh come on", "accha" → "ah okay/right", "kya matlab" → "what do you mean", etc.
+6. Preserve ALL Reddit markdown formatting (bold, italic, links, bullet points, line breaks, headers).
+7. Preserve ALL emojis exactly as-is.
+8. Transliterate names, places, and proper nouns from Devanagari to English (e.g., "मुंबई" → "Mumbai").
+9. Keep [deleted] and [removed] as-is — do NOT translate them.
+10. If a comment is just an emoji or a single English word/phrase, return it unchanged.
 
-Return ONLY a valid JSON object with the same keys and translated values. No extra text, no explanations.`;
-
-// Rough token estimation: ~4 chars per token for English, ~3 for Hindi/mixed
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 3.5);
-}
-
-const MAX_TOKENS_PER_CHUNK = 60000;
-
-function chunkTextMap(
-  textMap: Record<string, string>
-): Record<string, string>[] {
-  const entries = Object.entries(textMap);
-  const chunks: Record<string, string>[] = [];
-  let currentChunk: Record<string, string> = {};
-  let currentTokens = 0;
-
-  for (const [key, value] of entries) {
-    const entryTokens = estimateTokens(value) + estimateTokens(key) + 10;
-
-    if (
-      currentTokens + entryTokens > MAX_TOKENS_PER_CHUNK &&
-      Object.keys(currentChunk).length > 0
-    ) {
-      chunks.push(currentChunk);
-      currentChunk = {};
-      currentTokens = 0;
-    }
-
-    currentChunk[key] = value;
-    currentTokens += entryTokens;
-  }
-
-  if (Object.keys(currentChunk).length > 0) {
-    chunks.push(currentChunk);
-  }
-
-  return chunks;
-}
+Return ONLY a valid JSON object with the EXACT same keys and translated values. No wrapping, no markdown code blocks, no explanations.`;
 
 function getProvider(name: ProviderName): TranslationProvider {
-  const providers: Record<
-    ProviderName,
-    () => TranslationProvider | null
-  > = {
+  const providers: Record<ProviderName, () => TranslationProvider | null> = {
     gemini: createGeminiProvider,
     openai: createOpenAIProvider,
     anthropic: createAnthropicProvider,
@@ -87,10 +47,12 @@ export function getAvailableProviders(): {
   const results: { name: ProviderName; displayName: string }[] = [];
 
   const gemini = createGeminiProvider();
-  if (gemini) results.push({ name: gemini.name, displayName: gemini.displayName });
+  if (gemini)
+    results.push({ name: gemini.name, displayName: gemini.displayName });
 
   const openai = createOpenAIProvider();
-  if (openai) results.push({ name: openai.name, displayName: openai.displayName });
+  if (openai)
+    results.push({ name: openai.name, displayName: openai.displayName });
 
   const anthropic = createAnthropicProvider();
   if (anthropic)
@@ -99,25 +61,16 @@ export function getAvailableProviders(): {
   return results;
 }
 
-export async function translatePost(
-  post: RedditPost,
+/**
+ * Translate a single chunk of text.
+ * Called once per serverless invocation — keeps execution under 10s.
+ */
+export async function translateChunk(
+  textMap: Record<string, string>,
   providerName: ProviderName
-): Promise<RedditPost> {
+): Promise<Record<string, string>> {
+  if (Object.keys(textMap).length === 0) return {};
+
   const provider = getProvider(providerName);
-  const textMap = flattenTextMap(post);
-
-  // Nothing to translate
-  if (Object.keys(textMap).length === 0) return post;
-
-  const chunks = chunkTextMap(textMap);
-
-  // Translate all chunks (in parallel if multiple)
-  const translatedChunks = await Promise.all(
-    chunks.map((chunk) => provider.translate(chunk, SYSTEM_PROMPT))
-  );
-
-  // Merge all translated chunks
-  const mergedTranslations = Object.assign({}, ...translatedChunks);
-
-  return injectTranslations(post, mergedTranslations);
+  return provider.translate(textMap, SYSTEM_PROMPT);
 }

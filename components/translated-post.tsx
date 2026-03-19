@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useRef } from "react";
 import { RedditPost } from "@/lib/types";
 import { Comment } from "./comment";
 
@@ -23,76 +23,139 @@ interface TranslatedPostProps {
   post: RedditPost;
   translationTimeMs: number;
   providerDisplayName: string;
+  isDone: boolean;
+}
+
+/**
+ * Hook for press-and-hold to reveal original text.
+ */
+function useHoldToReveal(hasTranslation: boolean) {
+  const [showOriginal, setShowOriginal] = useState(false);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onPointerDown = useCallback(() => {
+    if (!hasTranslation) return;
+    holdTimerRef.current = setTimeout(() => setShowOriginal(true), 200);
+  }, [hasTranslation]);
+
+  const onPointerUp = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setShowOriginal(false);
+  }, []);
+
+  const onPointerLeave = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setShowOriginal(false);
+  }, []);
+
+  const onContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (hasTranslation) e.preventDefault();
+    },
+    [hasTranslation]
+  );
+
+  return { showOriginal, onPointerDown, onPointerUp, onPointerLeave, onContextMenu };
 }
 
 export function TranslatedPost({
   post,
   translationTimeMs,
   providerDisplayName,
+  isDone,
 }: TranslatedPostProps) {
-  const [showOriginalTitle, setShowOriginalTitle] = useState(false);
-  const [showOriginalBody, setShowOriginalBody] = useState(false);
-
   const hasTitleTranslation = post.title !== post.originalTitle;
   const hasBodyTranslation = post.text !== post.originalText;
 
+  const titleHold = useHoldToReveal(hasTitleTranslation);
+  const bodyHold = useHoldToReveal(hasBodyTranslation);
+
   return (
     <div className="space-y-4">
-      {/* Translation info bar */}
-      <div className="flex items-center justify-between text-xs text-[#818384] px-1">
-        <span>
-          Translated with {providerDisplayName} in{" "}
-          {(translationTimeMs / 1000).toFixed(1)}s
-        </span>
-        <span>
-          {post.comments.length} top-level comments · {post.numComments} total
-        </span>
-      </div>
+      {/* Translation info bar — only show when done */}
+      {isDone && translationTimeMs > 0 && (
+        <div className="flex items-center justify-between text-xs text-[#818384] px-1">
+          <span>
+            Translated with {providerDisplayName} in{" "}
+            {(translationTimeMs / 1000).toFixed(1)}s
+          </span>
+          <span>
+            {post.comments.length} top-level comments · {post.numComments}{" "}
+            total
+          </span>
+        </div>
+      )}
+
+      {/* Hold hint */}
+      {isDone && (hasTitleTranslation || hasBodyTranslation) && (
+        <div className="text-[10px] text-[#818384] px-1 flex items-center gap-1">
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+          </svg>
+          Press and hold translated text to reveal the original
+        </div>
+      )}
 
       {/* Post card */}
       <div className="bg-[#1a1a1b] border border-[#343536] rounded-md overflow-hidden">
         {/* Post header */}
         <div className="px-4 pt-3 pb-1">
           <div className="flex items-center gap-1.5 text-xs text-[#818384] mb-2">
-            <span className="font-bold text-[#d7dadc] hover:underline cursor-pointer">
+            <span className="font-bold text-[#d7dadc]">
               r/{post.subreddit}
             </span>
             <span>·</span>
-            <span>
-              Posted by u/{post.author}
-            </span>
+            <span>Posted by u/{post.author}</span>
             <span>·</span>
             <span>{timeAgo(post.createdUtc)}</span>
           </div>
 
-          {/* Title */}
-          <h1 className="text-lg font-semibold text-[#d7dadc] mb-1">
-            {showOriginalTitle ? post.originalTitle : post.title}
+          {/* Title — press-and-hold for original */}
+          <h1
+            onPointerDown={titleHold.onPointerDown}
+            onPointerUp={titleHold.onPointerUp}
+            onPointerLeave={titleHold.onPointerLeave}
+            onContextMenu={titleHold.onContextMenu}
+            className={`text-lg font-semibold mb-1 transition-colors duration-200 ${
+              titleHold.showOriginal
+                ? "text-[#a0a0a0] italic"
+                : "text-[#d7dadc]"
+            } ${hasTitleTranslation ? "cursor-pointer" : ""}`}
+          >
+            {titleHold.showOriginal ? post.originalTitle : post.title}
           </h1>
           {hasTitleTranslation && (
-            <button
-              onClick={() => setShowOriginalTitle(!showOriginalTitle)}
-              className="text-xs text-[#4fbcff] hover:text-[#7fcdff] mb-2 transition-colors"
-            >
-              Show {showOriginalTitle ? "translation" : "original title"}
-            </button>
+            <span className="text-[10px] text-[#4fbcff] select-none">
+              hold to see original
+            </span>
           )}
 
-          {/* Body */}
+          {/* Body — press-and-hold for original */}
           {post.text && (
-            <div className="mt-2">
-              <div className="text-sm text-[#d7dadc] whitespace-pre-wrap leading-relaxed">
-                {showOriginalBody ? post.originalText : post.text}
-              </div>
-              {hasBodyTranslation && (
-                <button
-                  onClick={() => setShowOriginalBody(!showOriginalBody)}
-                  className="text-xs text-[#4fbcff] hover:text-[#7fcdff] mt-2 transition-colors"
-                >
-                  Show {showOriginalBody ? "translation" : "original text"}
-                </button>
-              )}
+            <div
+              onPointerDown={bodyHold.onPointerDown}
+              onPointerUp={bodyHold.onPointerUp}
+              onPointerLeave={bodyHold.onPointerLeave}
+              onContextMenu={bodyHold.onContextMenu}
+              className={`mt-2 text-sm whitespace-pre-wrap leading-relaxed transition-colors duration-200 ${
+                bodyHold.showOriginal
+                  ? "text-[#a0a0a0] italic bg-[#1f1f20] rounded px-2 py-1 -mx-2"
+                  : "text-[#d7dadc]"
+              } ${hasBodyTranslation ? "cursor-pointer" : ""}`}
+            >
+              {bodyHold.showOriginal ? post.originalText : post.text}
             </div>
+          )}
+          {hasBodyTranslation && (
+            <span className="text-[10px] text-[#4fbcff] mt-1 inline-block select-none">
+              hold to see original
+            </span>
           )}
         </div>
 
@@ -101,9 +164,7 @@ export function TranslatedPost({
           <span className="font-semibold">
             {formatScore(post.score)} upvotes
           </span>
-          <span>
-            {post.numComments} comments
-          </span>
+          <span>{post.numComments} comments</span>
         </div>
       </div>
 

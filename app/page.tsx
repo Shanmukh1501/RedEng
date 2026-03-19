@@ -1,10 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { URLInput } from "@/components/url-input";
 import { TranslatedPost } from "@/components/translated-post";
 import { LoadingSkeleton } from "@/components/loading-skeleton";
-import { ProviderName, RedditPost } from "@/lib/types";
+import {
+  AppState,
+  ProviderName,
+  RedditPost,
+  TranslateChunkResponse,
+} from "@/lib/types";
+import {
+  fetchRedditJsonFromBrowser,
+  flattenTextMap,
+  chunkTextMap,
+  injectTranslations,
+} from "@/lib/reddit";
 
 const PROVIDER_DISPLAY: Record<ProviderName, string> = {
   gemini: "Gemini 2.5 Flash",
@@ -12,57 +23,168 @@ const PROVIDER_DISPLAY: Record<ProviderName, string> = {
   anthropic: "Claude Haiku 4.5",
 };
 
-type AppState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | {
-      status: "success";
-      post: RedditPost;
-      provider: ProviderName;
-      translationTimeMs: number;
-    }
-  | { status: "error"; message: string; details?: string };
-
 export default function Home() {
   const [state, setState] = useState<AppState>({ status: "idle" });
+  // Use a ref to accumulate translations across async chunk callbacks
+  // so we always merge into the latest post state without stale closures.
+  const postRef = useRef<RedditPost | null>(null);
+  const translationsRef = useRef<Record<string, string>>({});
 
   async function handleTranslate(url: string, provider: ProviderName) {
-    setState({ status: "loading" });
+    // Reset refs
+    postRef.current = null;
+    translationsRef.current = {};
 
+    // Phase 1: Fetch Reddit data from the browser (user's IP)
+    setState({ status: "fetching_reddit" });
+
+    let post: RedditPost;
     try {
-      const response = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, provider }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setState({
-          status: "error",
-          message: data.error || "Translation failed",
-          details: data.details,
-        });
-        return;
-      }
-
-      setState({
-        status: "success",
-        post: data.post,
-        provider: data.provider,
-        translationTimeMs: data.translationTimeMs,
-      });
+      post = await fetchRedditJsonFromBrowser(url);
     } catch (err) {
       setState({
         status: "error",
         message:
-          err instanceof Error
-            ? err.message
-            : "Network error. Please try again.",
+          err instanceof Error ? err.message : "Failed to fetch Reddit post",
+        details: "Make sure the URL is a valid, public Reddit post.",
+      });
+      return;
+    }
+
+    postRef.current = post;
+
+    // Phase 2: Show the original post immediately
+    setState({
+      status: "displaying_original",
+      post,
+      provider,
+    });
+
+    // Phase 3: Build flat text map and chunk it
+    const textMap = flattenTextMap(post);
+    const totalKeys = Object.keys(textMap).length;
+
+    if (totalKeys === 0) {
+      // Nothing to translate (all English or empty)
+      setState({
+        status: "done",
+        post,
+        provider,
+        translationTimeMs: 0,
+      });
+      return;
+    }
+
+    const chunks = chunkTextMap(textMap, 35);
+    const startTime = Date.now();
+    let completedChunks = 0;
+
+    setState({
+      status: "translating",
+      post,
+      provider,
+      totalChunks: chunks.length,
+      completedChunks: 0,
+    });
+
+    // Phase 4: Fire parallel translation requests, merge progressively
+    const chunkPromises = chunks.map(async (chunk, index) => {
+      try {
+        const response = await fetch("/api/translate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ textMap: chunk, provider }),
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          console.error(`Chunk ${index} failed:`, errData);
+          return null;
+        }
+
+        const data: TranslateChunkResponse = await response.json();
+        return data.translations;
+      } catch (err) {
+        console.error(`Chunk ${index} network error:`, err);
+        return null;
+      }
+    });
+
+    // As each chunk resolves, merge translations into the post progressively
+    const settledResults = await Promise.allSettled(
+      chunkPromises.map(async (promise, index) => {
+        const translations = await promise;
+        if (!translations) return;
+
+        // Merge into accumulated translations
+        Object.assign(translationsRef.current, translations);
+
+        // Re-inject ALL accumulated translations into the original post
+        const updatedPost = injectTranslations(
+          postRef.current!,
+          translationsRef.current
+        );
+
+        completedChunks++;
+
+        setState({
+          status: "translating",
+          post: updatedPost,
+          provider,
+          totalChunks: chunks.length,
+          completedChunks,
+        });
+
+        return index;
+      })
+    );
+
+    // Phase 5: Done — final state
+    const translationTimeMs = Date.now() - startTime;
+    const failedChunks = settledResults.filter(
+      (r) => r.status === "rejected"
+    ).length;
+
+    // Build final post with all accumulated translations
+    const finalPost = injectTranslations(
+      postRef.current!,
+      translationsRef.current
+    );
+
+    if (
+      failedChunks === chunks.length &&
+      Object.keys(translationsRef.current).length === 0
+    ) {
+      setState({
+        status: "error",
+        message: "All translation requests failed",
+        details:
+          "Check your API key configuration and try again.",
+      });
+    } else {
+      setState({
+        status: "done",
+        post: finalPost,
+        provider,
+        translationTimeMs,
       });
     }
   }
+
+  // Derive what to render based on state
+  const showPost =
+    state.status === "displaying_original" ||
+    state.status === "translating" ||
+    state.status === "done";
+
+  const isTranslating = state.status === "translating";
+  const translationProgress =
+    state.status === "translating"
+      ? {
+          completed: state.completedChunks,
+          total: state.totalChunks,
+        }
+      : null;
 
   return (
     <div className="min-h-screen bg-[#030303]">
@@ -111,7 +233,11 @@ export default function Home() {
         <div className="mb-6">
           <URLInput
             onSubmit={handleTranslate}
-            isLoading={state.status === "loading"}
+            isLoading={
+              state.status === "fetching_reddit" ||
+              state.status === "displaying_original" ||
+              state.status === "translating"
+            }
           />
         </div>
 
@@ -130,7 +256,7 @@ export default function Home() {
           </div>
         )}
 
-        {state.status === "loading" && <LoadingSkeleton />}
+        {state.status === "fetching_reddit" && <LoadingSkeleton stage="fetching" />}
 
         {state.status === "error" && (
           <div className="bg-[#1a1a1b] border border-red-900/50 rounded-md p-6 text-center">
@@ -143,12 +269,66 @@ export default function Home() {
           </div>
         )}
 
-        {state.status === "success" && (
-          <TranslatedPost
-            post={state.post}
-            translationTimeMs={state.translationTimeMs}
-            providerDisplayName={PROVIDER_DISPLAY[state.provider]}
-          />
+        {showPost && (
+          <>
+            {/* Translation progress bar */}
+            {isTranslating && translationProgress && (
+              <div className="mb-4">
+                <div className="flex items-center justify-between text-xs text-[#818384] mb-1.5">
+                  <span className="flex items-center gap-2">
+                    <svg
+                      className="animate-spin h-3.5 w-3.5 text-[#ff4500]"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                      />
+                    </svg>
+                    Translating... comments are appearing in English as they&apos;re ready
+                  </span>
+                  <span>
+                    {translationProgress.completed}/{translationProgress.total} chunks
+                  </span>
+                </div>
+                <div className="w-full bg-[#272729] rounded-full h-1.5">
+                  <div
+                    className="bg-[#ff4500] h-1.5 rounded-full transition-all duration-500 ease-out"
+                    style={{
+                      width: `${(translationProgress.completed / translationProgress.total) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <TranslatedPost
+              post={
+                state.status === "displaying_original" ||
+                state.status === "translating" ||
+                state.status === "done"
+                  ? state.post
+                  : ({} as RedditPost)
+              }
+              translationTimeMs={
+                state.status === "done" ? state.translationTimeMs : 0
+              }
+              providerDisplayName={
+                "provider" in state ? PROVIDER_DISPLAY[state.provider] : ""
+              }
+              isDone={state.status === "done"}
+            />
+          </>
         )}
       </main>
     </div>

@@ -1,62 +1,60 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isValidRedditUrl, fetchRedditPost } from "@/lib/reddit";
-import { translatePost } from "@/lib/translator";
-import { ProviderName, TranslateError, TranslateResponse } from "@/lib/types";
+import { translateChunk } from "@/lib/translator";
+import {
+  ProviderName,
+  TranslateChunkRequest,
+  TranslateChunkResponse,
+  TranslateError,
+} from "@/lib/types";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { url, provider } = body as {
-      url?: string;
-      provider?: ProviderName;
-    };
+    const body = (await request.json()) as TranslateChunkRequest;
+    const { textMap, provider } = body;
 
-    if (!url || typeof url !== "string") {
+    // Validate textMap
+    if (!textMap || typeof textMap !== "object" || Array.isArray(textMap)) {
       return NextResponse.json<TranslateError>(
-        { error: "Missing or invalid URL" },
+        { error: "Missing or invalid textMap. Expected a JSON object." },
         { status: 400 }
       );
     }
 
-    if (!isValidRedditUrl(url)) {
+    const keyCount = Object.keys(textMap).length;
+    if (keyCount === 0) {
+      return NextResponse.json<TranslateChunkResponse>({ translations: {} });
+    }
+
+    if (keyCount > 50) {
       return NextResponse.json<TranslateError>(
         {
-          error: "Invalid Reddit URL",
-          details:
-            "URL must be a Reddit post link (e.g., https://www.reddit.com/r/india/comments/...)",
+          error: "Chunk too large. Max 50 keys per request.",
+          details: `Received ${keyCount} keys. Split into smaller chunks client-side.`,
         },
         { status: 400 }
       );
     }
 
+    // Validate provider
     const providerName: ProviderName = provider || "gemini";
     const validProviders: ProviderName[] = ["gemini", "openai", "anthropic"];
     if (!validProviders.includes(providerName)) {
       return NextResponse.json<TranslateError>(
-        { error: `Invalid provider. Choose from: ${validProviders.join(", ")}` },
+        {
+          error: `Invalid provider. Choose from: ${validProviders.join(", ")}`,
+        },
         { status: 400 }
       );
     }
 
-    const startTime = Date.now();
+    // Translate this single chunk
+    const translations = await translateChunk(textMap, providerName);
 
-    // Fetch Reddit data
-    const post = await fetchRedditPost(url);
-
-    // Translate
-    const translatedPost = await translatePost(post, providerName);
-
-    const translationTimeMs = Date.now() - startTime;
-
-    return NextResponse.json<TranslateResponse>({
-      post: translatedPost,
-      provider: providerName,
-      translationTimeMs,
-    });
+    return NextResponse.json<TranslateChunkResponse>({ translations });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "An unexpected error occurred";
-    console.error("Translation error:", error);
+    console.error("Translation chunk error:", error);
 
     return NextResponse.json<TranslateError>(
       { error: message },

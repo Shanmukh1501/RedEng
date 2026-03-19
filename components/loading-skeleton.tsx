@@ -2,7 +2,16 @@
 
 import { Skeleton } from "@/components/ui/skeleton";
 
-export function LoadingSkeleton() {
+interface LoadingSkeletonProps {
+  stage?: "fetching" | "translating";
+}
+
+export function LoadingSkeleton({ stage = "fetching" }: LoadingSkeletonProps) {
+  const message =
+    stage === "fetching"
+      ? "Fetching post from Reddit..."
+      : "Translating...";
+
   return (
     <div className="space-y-4 animate-in fade-in duration-300">
       {/* Post skeleton */}
@@ -24,7 +33,6 @@ export function LoadingSkeleton() {
       {/* Comments skeleton */}
       <div className="bg-[#1a1a1b] border border-[#343536] rounded-md p-4 space-y-4">
         <Skeleton className="h-3 w-24 bg-[#343536]" />
-
         {[1, 2, 3, 4, 5].map((i) => (
           <div key={i} className={i > 2 ? "ml-6" : ""}>
             <div className="flex items-center gap-2 mb-2">
@@ -59,7 +67,7 @@ export function LoadingSkeleton() {
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
             />
           </svg>
-          Fetching post and translating... this may take 10-30 seconds
+          {message}
         </div>
       </div>
     </div>

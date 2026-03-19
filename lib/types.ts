@@ -7,6 +7,7 @@ export interface RedditComment {
   createdUtc: number;
   replies: RedditComment[];
   moreCount?: number;
+  isTranslated?: boolean;
 }
 
 export interface RedditPost {
@@ -36,18 +37,41 @@ export interface TranslationProvider {
   ): Promise<Record<string, string>>;
 }
 
-export interface TranslateRequest {
-  url: string;
+// New API contract: client sends a single chunk of text to translate
+export interface TranslateChunkRequest {
+  textMap: Record<string, string>;
   provider: ProviderName;
 }
 
-export interface TranslateResponse {
-  post: RedditPost;
-  provider: ProviderName;
-  translationTimeMs: number;
+export interface TranslateChunkResponse {
+  translations: Record<string, string>;
 }
 
 export interface TranslateError {
   error: string;
   details?: string;
 }
+
+// Client-side progressive state
+export type AppState =
+  | { status: "idle" }
+  | { status: "fetching_reddit" }
+  | {
+      status: "displaying_original";
+      post: RedditPost;
+      provider: ProviderName;
+    }
+  | {
+      status: "translating";
+      post: RedditPost;
+      provider: ProviderName;
+      totalChunks: number;
+      completedChunks: number;
+    }
+  | {
+      status: "done";
+      post: RedditPost;
+      provider: ProviderName;
+      translationTimeMs: number;
+    }
+  | { status: "error"; message: string; details?: string };
